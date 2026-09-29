@@ -1,0 +1,12 @@
+{
+  "name": "pisuite-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "npm test --workspaces"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.99.1"
+  }
+}

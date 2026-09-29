@@ -1,0 +1,17 @@
+{
+  "name": "pisuite-setup",
+  "version": "0.1.0",
+  "description": "Install the standalone packages in PiSuite without changing existing Pi choices.",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "files": ["index.ts"],
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
