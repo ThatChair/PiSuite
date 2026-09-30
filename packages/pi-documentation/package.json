@@ -4,13 +4,12 @@
   "description": "Move Pi's built-in documentation guidance into an on-demand skill.",
   "type": "module",
   "keywords": ["pi-package"],
-  "files": ["index.ts", "skills/"],
+  "files": ["index.ts", "templates/"],
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "pi": {
-    "extensions": ["./index.ts"],
-    "skills": []
+    "extensions": ["./index.ts"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"

@@ -47,6 +47,12 @@ test("legacy removal keeps appended context and does nothing to unrecognized pro
 	assert.equal(beforeStart({ systemPrompt: result.systemPrompt, systemPromptOptions: {} }), undefined);
 });
 
+test("legacy removal tolerates events without prompt options", () => {
+	const docsBlock = buildSystemPrompt(baseOptions).match(/<docs>\n([\s\S]*?)\n<\/docs>/)[1];
+	const result = beforeStart({ systemPrompt: `Prefix\n\n${docsBlock}\n\nAppendix` });
+	assert.equal(result.systemPrompt, "Prefix\n\nAppendix");
+});
+
 test("skill uses the hosting Pi's paths independently of PATH and cleans up on shutdown", () => {
 	const handlers = new Map();
 	documentation({ on: (name, handler) => handlers.set(name, handler) });

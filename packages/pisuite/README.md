@@ -16,6 +16,8 @@ The npm commands require the packages to be published. For local development, us
 
 Setup adds missing packages to global Pi settings. Packages already listed in global or project settings are left alone, including pinned versions, filters, and disabled entries. Local or git installs whose manifest names match a standalone package also count as configured. Existing entries are skipped even if their installation is missing from disk. Setup does not repair or update them.
 
+Invalid settings or unreadable package manifests suppress the startup reminder. Explicit setup reports the error and leaves package entries unchanged.
+
 Use `pi config` to toggle setup's single `index.ts` entry. Each standalone package has its own toggle; the setup package does not load their extensions or bundle them as dependencies.
 
 ## Included packages

@@ -15,7 +15,11 @@ function missingPackages(manager: PackageManager, settings: SettingsManager): st
 	for (const scope of ["user", "project"] as const) {
 		const entries = scope === "user" ? settings.getGlobalSettings() : settings.getProjectSettings();
 		for (const entry of entries.packages ?? []) {
-			const source = typeof entry === "string" ? entry : entry.source;
+			const rawSource = typeof entry === "string" ? entry : entry?.source;
+			if (typeof rawSource !== "string" || !rawSource.trim()) {
+				throw new Error("Invalid Pi package entry: expected a non-empty source.");
+			}
+			const source = rawSource.trim();
 			const npmName = source.startsWith("npm:")
 				? /^((?:@[^/]+\/)?[^@]+)(?:@.*)?$/.exec(source.slice(4).trim())?.[1]
 				: undefined;
@@ -48,9 +52,13 @@ function setupState(cwd: string) {
 
 export default function (pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
-		const { manager, settings } = setupState(ctx.cwd);
-		if (missingPackages(manager, settings).length) {
-			ctx.ui.notify("PiSuite has packages not yet configured. Run /pisuite-setup to install them.", "info");
+		try {
+			const { manager, settings } = setupState(ctx.cwd);
+			if (missingPackages(manager, settings).length) {
+				ctx.ui.notify("PiSuite has packages not yet configured. Run /pisuite-setup to install them.", "info");
+			}
+		} catch {
+			// Pi reports settings errors. Only explicit setup should fail on unreadable metadata.
 		}
 	});
 

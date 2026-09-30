@@ -14,7 +14,7 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("resources_discover", () => {
 		if (!skillDir) {
 			skillDir = mkdtempSync(join(tmpdir(), "pisuite-pi-documentation-"));
-			const guidance = readFileSync(join(extensionDir, "skills/pi-documentation/SKILL.md"), "utf8");
+			const guidance = readFileSync(join(extensionDir, "templates/pi-documentation/SKILL.md"), "utf8");
 			writeFileSync(join(skillDir, "SKILL.md"), `${guidance}\n## Documentation paths\n\n- Main documentation: ${getReadmePath()}\n- Additional docs: ${getDocsPath()}\n- Examples: ${getExamplesPath()}\n`);
 		}
 		return { skillPaths: [join(skillDir, "SKILL.md")] };
@@ -27,9 +27,9 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("before_agent_start", (event) => {
 		const options = event.systemPromptOptions;
-		if (options.customPrompt || options.forceSystemPrompt !== undefined) return;
+		if (options?.customPrompt || options?.forceSystemPrompt !== undefined) return;
 
-		if (options.sections) {
+		if (options?.sections) {
 			if (options.sections.docs !== undefined) return;
 			// Pi ignores empty section overrides. Whitespace replaces its docs guidance
 			// while keeping the other structured prompt sections and cache behavior.

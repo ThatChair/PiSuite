@@ -19,6 +19,6 @@ The npm install commands become available after the packages are published.
 
 ## Development
 
-The repo root is a private npm workspace. Run `npm install --ignore-scripts` and `npm test`. Try a package with `pi -e ./packages/pi-documentation` or `pi -e ./packages/pisuite`. Setup uses published npm packages even when its own extension is loaded locally.
+The repo root is a private npm workspace. Run `npm install --ignore-scripts`, `npm run typecheck` for the extension source, and `npm test` for the workspace tests. Tests use Node's type stripping; the separate typecheck command checks TypeScript. Try a package with `pi -e ./packages/pi-documentation` or `pi -e ./packages/pisuite`. Setup uses published npm packages even when its own extension is loaded locally.
 
 Release changed packages independently from `main`, using `npm publish --workspace <package-name>`. Update `packages/pisuite/index.ts` and release `pisuite-setup` when the suite package list or setup changes. Publish new standalone packages before the setup package that lists them.

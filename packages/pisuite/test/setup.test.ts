@@ -37,6 +37,7 @@ function fixture(t, globalSettings = {}, projectSettings = {}) {
 		readGlobal: () => JSON.parse(readFileSync(globalPath, "utf8")),
 		readProject: () => readFileSync(projectPath, "utf8"),
 		globalPath,
+		projectPath,
 	};
 }
 
@@ -66,7 +67,7 @@ test("preserves disabled pinned global packages without repairing missing instal
 });
 
 test("preserves disabled pinned npm entries with whitespace", async (t) => {
-	for (const source of ["npm: pisuite-pi-documentation@0.1.0", "npm:pisuite-pi-documentation@0.1.0 \t"]) {
+	for (const source of ["npm: pisuite-pi-documentation@0.1.0", "npm:pisuite-pi-documentation@0.1.0 \t", " npm:pisuite-pi-documentation@0.1.0"]) {
 		for (const scope of ["global", "project"]) {
 			await t.test(`${scope}: ${JSON.stringify(source)}`, async (t) => {
 				const original = { packages: [{ source, extensions: [] }] };
@@ -120,7 +121,66 @@ test("failed installs do not persist a package entry", async (t) => {
 test("malformed settings abort setup without overwriting the file", async (t) => {
 	const f = fixture(t);
 	writeFileSync(f.globalPath, "{broken");
+	assert.doesNotThrow(() => f.handlers.get("session_start")({}, f.ctx));
 	await assert.rejects(f.run());
 	assert.deepEqual(f.installs, []);
+	assert.deepEqual(f.messages, []);
 	assert.equal(readFileSync(f.globalPath, "utf8"), "{broken");
+});
+
+test("invalid project settings suppress the startup reminder and abort setup", async (t) => {
+	const f = fixture(t);
+	writeFileSync(f.projectPath, "{broken");
+	assert.doesNotThrow(() => f.handlers.get("session_start")({}, f.ctx));
+	await assert.rejects(f.run());
+	assert.deepEqual(f.installs, []);
+	assert.deepEqual(f.messages, []);
+	assert.equal(f.readProject(), "{broken");
+	assert.deepEqual(f.readGlobal(), {});
+});
+
+test("malformed package entries suppress reminders and cannot trigger installs", async (t) => {
+	for (const entry of [null, {}, { source: 123 }, " "]) {
+		await t.test(JSON.stringify(entry), async (t) => {
+			const original = { packages: [entry] };
+			const f = fixture(t, original);
+			assert.doesNotThrow(() => f.handlers.get("session_start")({}, f.ctx));
+			await assert.rejects(f.run(), /expected a non-empty source/);
+			assert.deepEqual(f.installs, []);
+			assert.deepEqual(f.messages, []);
+			assert.deepEqual(f.readGlobal(), original);
+		});
+	}
+});
+
+test("unreadable local manifests suppress reminders and abort setup", async (t) => {
+	for (const failure of ["invalid JSON", "unreadable file"]) {
+		await t.test(failure, async (t) => {
+			const f = fixture(t);
+			const packagePath = join(f.ctx.cwd, "local-package");
+			mkdirSync(packagePath);
+			const manifestPath = join(packagePath, "package.json");
+			if (failure === "invalid JSON") writeFileSync(manifestPath, "{broken");
+			else mkdirSync(manifestPath);
+			const original = { packages: [{ source: packagePath, extensions: [] }] };
+			writeFileSync(f.globalPath, JSON.stringify(original));
+			assert.doesNotThrow(() => f.handlers.get("session_start")({}, f.ctx));
+			await assert.rejects(f.run());
+			assert.deepEqual(f.installs, []);
+			assert.deepEqual(f.messages, []);
+			assert.deepEqual(f.readGlobal(), original);
+		});
+	}
+});
+
+test("preserves spaces in local package paths", async (t) => {
+	const f = fixture(t);
+	const packagePath = join(f.ctx.cwd, "local package");
+	mkdirSync(packagePath);
+	writeFileSync(join(packagePath, "package.json"), JSON.stringify({ name: "pisuite-pi-documentation" }));
+	const original = { packages: [{ source: packagePath, extensions: [] }] };
+	writeFileSync(f.globalPath, JSON.stringify(original));
+	await f.run();
+	assert.deepEqual(f.installs, []);
+	assert.deepEqual(f.readGlobal(), original);
 });

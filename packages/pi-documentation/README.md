@@ -18,6 +18,8 @@ The npm commands require the packages to be published. For local development, us
 
 The extension exposes its skill through `resources_discover`, using a temporary copy with documentation paths from the running Pi host. It removes that copy when the session shuts down. In `pi config`, toggle this package's single `index.ts` entry, then `/reload`. Disabling it removes the skill and restores Pi's built-in documentation guidance together.
 
+The source skill lives in `templates/` so Pi only discovers the generated copy. A crash or SIGKILL can leave that copy in the system temp directory until system cleanup removes it.
+
 Custom system prompts and explicit documentation section overrides are preserved. On older Pi releases, the extension removes only the recognized built-in documentation block. If that block changes, it leaves the prompt intact.
 
 ## Verification
