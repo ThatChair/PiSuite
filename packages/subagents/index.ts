@@ -12,11 +12,11 @@ const SpawnParams = Type.Object({
 		Type.Literal("off"), Type.Literal("minimal"), Type.Literal("low"), Type.Literal("medium"),
 		Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
 	])),
-	background: Type.Optional(Type.Boolean({ default: false, description: "Return a worker ID immediately and deliver its result later. Foreground is the default." })),
+	background: Type.Optional(Type.Boolean({ default: false, description: "Return a worker ID immediately and deliver its result later. With sequential Pi tool execution, use true inside codemode or custom tools and return without waiting." })),
 });
 const StatusParams = Type.Object({
 	id: Type.Optional(Type.String({ description: "Worker ID. Omit to list all workers." })),
-	wait: Type.Optional(Type.Boolean({ description: "Wait for this worker to finish. Requires an ID." })),
+	wait: Type.Optional(Type.Boolean({ description: "Wait for this worker to finish. Requires an ID. With sequential Pi tool execution, call directly; inside codemode or custom tools poll without waiting." })),
 });
 const StopParams = Type.Object({
 	id: Type.Optional(Type.String({ description: "Stop this worker and its descendants. Omit to stop all workers." })),
@@ -147,7 +147,7 @@ export default function (pi: ExtensionAPI): void {
 	const spawn: ToolDefinition<typeof SpawnParams> = {
 		name: "spawn_worker",
 		label: "Spawn worker",
-		description: "Delegate an arbitrary task to a worker with fresh context and shared project/tool access. Foreground by default; background returns immediately and sends its result to the main agent later. All workers, including descendants, share four slots. Assign non-overlapping edit scopes. Workers may spawn more workers if slots are free. With sequential Pi tool execution, use background:true from codemode or custom tools and return without waiting, so their queue can run worker calls.",
+		description: "Delegate a task to a worker with fresh context and shared project/tool access. Workers and descendants share four slots. Assign non-overlapping edit scopes.",
 		parameters: SpawnParams,
 		async execute(_id, params, signal, onUpdate, ctx) {
 			if (!live) throw new Error("This worker session has closed.");
@@ -173,7 +173,7 @@ export default function (pi: ExtensionAPI): void {
 	const status: ToolDefinition<typeof StatusParams> = {
 		name: "worker_status",
 		label: "Worker status",
-		description: "List workers, retrieve a worker's complete result, or wait for one worker to finish. Waiting on yourself or an ancestor is invalid. With sequential Pi tool execution, call wait:true directly; inside codemode or custom tools poll without waiting or rely on background completion delivery.",
+		description: "Inspect worker status and complete results. A worker cannot wait on itself or an ancestor.",
 		parameters: StatusParams,
 		async execute(_id, params, signal) {
 			if (!params.id) {
@@ -197,7 +197,7 @@ export default function (pi: ExtensionAPI): void {
 	const stop: ToolDefinition<typeof StopParams> = {
 		name: "stop_worker",
 		label: "Stop worker",
-		description: "Cancel one worker and its descendants, or omit the ID to cancel all workers, including background workers. Cancelled workers do not deliver completion messages.",
+		description: "Cancel workers and suppress their background completion messages.",
 		parameters: StopParams,
 		async execute(_id, params) {
 			return result(workers.stop(params.id));
