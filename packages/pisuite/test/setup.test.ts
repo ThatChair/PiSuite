@@ -153,6 +153,25 @@ test("malformed package entries suppress reminders and cannot trigger installs",
 	}
 });
 
+test("non-array package settings abort before installing or changing either file", async (t) => {
+	for (const packages of ["npm:pisuite-pi-documentation", null]) {
+		for (const scope of ["global", "project"]) {
+			await t.test(`${scope}: ${JSON.stringify(packages)}`, async (t) => {
+				const original = { packages };
+				const f = fixture(t, scope === "global" ? original : {}, scope === "project" ? original : {});
+				const beforeGlobal = readFileSync(f.globalPath, "utf8");
+				const beforeProject = f.readProject();
+				assert.doesNotThrow(() => f.handlers.get("session_start")({}, f.ctx));
+				await assert.rejects(f.run(), /packages must be an array/);
+				assert.deepEqual(f.installs, []);
+				assert.deepEqual(f.messages, []);
+				assert.equal(readFileSync(f.globalPath, "utf8"), beforeGlobal);
+				assert.equal(f.readProject(), beforeProject);
+			});
+		}
+	}
+});
+
 test("unreadable local manifests suppress reminders and abort setup", async (t) => {
 	for (const failure of ["invalid JSON", "unreadable file"]) {
 		await t.test(failure, async (t) => {

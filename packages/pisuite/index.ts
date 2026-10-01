@@ -14,6 +14,9 @@ function missingPackages(manager: PackageManager, settings: SettingsManager): st
 	const configured = new Set<string>();
 	for (const scope of ["user", "project"] as const) {
 		const entries = scope === "user" ? settings.getGlobalSettings() : settings.getProjectSettings();
+		if (entries.packages !== undefined && !Array.isArray(entries.packages)) {
+			throw new Error("Invalid Pi settings: packages must be an array.");
+		}
 		for (const entry of entries.packages ?? []) {
 			const rawSource = typeof entry === "string" ? entry : entry?.source;
 			if (typeof rawSource !== "string" || !rawSource.trim()) {
