@@ -1,0 +1,22 @@
+{
+  "name": "pisuite-subagents",
+  "version": "0.1.0",
+  "description": "Delegate dynamic tasks to foreground or background Pi workers.",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "files": ["index.ts", "workers.ts"],
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "dependencies": {
+    "typebox": "1.3.27"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "^0.99.1",
+    "@earendil-works/pi-coding-agent": "^0.99.1",
+    "@earendil-works/pi-tui": "^0.99.1"
+  }
+}

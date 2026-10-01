@@ -23,6 +23,7 @@ Use `pi config` to toggle setup's single `index.ts` entry. Each standalone packa
 ## Included packages
 
 - [pisuite-pi-documentation](../pi-documentation/README.md)
+- [pisuite-subagents](../subagents/README.md) (requires Pi 0.99.1 or newer)
 
 ## Verification and releases
 

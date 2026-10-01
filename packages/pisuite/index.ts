@@ -8,7 +8,7 @@ import {
 	type PackageManager,
 } from "@earendil-works/pi-coding-agent";
 
-export const suitePackages = ["pisuite-pi-documentation"];
+export const suitePackages = ["pisuite-pi-documentation", "pisuite-subagents"];
 
 function missingPackages(manager: PackageManager, settings: SettingsManager): string[] {
 	const configured = new Set<string>();
