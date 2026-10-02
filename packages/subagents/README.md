@@ -43,6 +43,8 @@ Subagents share the host's working directory and files. They may edit or run com
 
 The main agent is responsible for assigning file scopes and resolving concurrent edits. There are no worktrees or automatic merges. Cancellation is cooperative, as in the main Pi agent: a tool or provider must honor its abort signal. Subagents do not have session-level automatic compaction or recovery; provider failures are reported to the caller.
 
+Pi 0.99.2 reserves 4,096 tokens when budgeting model output. An 8K model with a large host prompt or tool list can therefore truncate replies and background follow-ups. Use a larger context window, shorten the host prompt, or enable fewer tools.
+
 The footer shows the active subagent count. Results include each subagent's token and cost totals. Main-agent subagent tool calls also report new model usage to Pi's session totals, including descendants. Background completion messages cannot report session usage through Pi's message API; that usage is included the next time the main agent calls a subagent tool. Subagent output in foreground results and background messages is capped at 50,000 characters; `subagent_status` retrieves the complete output.
 
 No package-specific configuration is required. In `pi config`, disable the package's single `index.ts` entry, then `/reload`. This disables all subagent tools, the `/subagents` command, status updates, and completion delivery together.
