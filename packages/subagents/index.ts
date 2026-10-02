@@ -102,11 +102,15 @@ export default function (pi: ExtensionAPI): void {
 	async function runSubagent(subagent: Subagent, caller: Caller): Promise<string> {
 		const { model, thinking } = caller;
 		const scope: Caller = { ...caller, parentId: subagent.id };
+		const rawArguments = new Map<string, unknown>();
 		const tools: AgentTool[] = caller.ctx.tools.map((tool) => ({
 			...tool,
-			execute: (_id, params, signal, onUpdate) => callerScope.run({ ...scope, deferWait: tool.name === "spawn_subagent" || tool.name === "subagent_status" }, async () => {
+			prepareArguments: tool.prepareArguments && ((args) => tool.prepareArguments!(structuredClone(args))),
+			execute: (id, params, signal, onUpdate) => callerScope.run({ ...scope, deferWait: tool.name === "spawn_subagent" || tool.name === "subagent_status" }, async () => {
 				subagent.controller.signal.throwIfAborted();
-				const outcome = await caller.ctx.executeTool(tool.name, params, { signal, onUpdate });
+				const input = rawArguments.has(id) ? rawArguments.get(id) : params;
+				rawArguments.delete(id);
+				const outcome = await caller.ctx.executeTool(tool.name, structuredClone(input), { signal, onUpdate });
 				const waiting = callerScope.getStore()?.waitFor;
 				if (!outcome.isError && waiting) {
 					// Release Pi's serial nested-tool queue before waiting, so the
@@ -126,6 +130,11 @@ export default function (pi: ExtensionAPI): void {
 				messages: [],
 			},
 			convertToLlm,
+			beforeToolCall: async ({ toolCall }) => {
+				// Forward original input so the host's compatibility shim does
+				// not compound the outer normalization.
+				rawArguments.set(toolCall.id, toolCall.arguments);
+			},
 			streamFn: (selected, context, options) => caller.ctx.modelRegistry.streamSimple(selected, context, options),
 		});
 		const abort = () => agent.abort();
@@ -149,6 +158,7 @@ export default function (pi: ExtensionAPI): void {
 			return last.content.filter((part) => part.type === "text").map((part) => part.text).join("\n") || "(No text output.)";
 		} finally {
 			unsubscribe();
+			rawArguments.clear();
 			subagent.controller.signal.removeEventListener("abort", abort);
 			agent.clearAllQueues();
 		}

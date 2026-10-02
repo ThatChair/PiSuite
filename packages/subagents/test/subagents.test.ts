@@ -514,3 +514,34 @@ test("nested background completion gives the main follow-up its own caller and m
 	assert.equal(parse(fresh).parentId, undefined);
 	assert.equal(parse(fresh).model, "test/model");
 });
+
+test("the host receives raw arguments for compatibility shims and still validates inputs", { timeout: 5000 }, async (t) => {
+	const executions = [];
+	let childResults;
+	const session = await hostFixture(t, (selected, context) => {
+		const results = context.messages.filter((message) => message.role === "toolResult");
+		if (!userText(context).includes("Subagent ID:")) return reply(selected, results.length ? text("Main completed") : call("spawn_subagent", { task: "Use compatibility tools" }));
+		if (!results.length) return reply(selected, call("compat", { value: "original" }));
+		if (results.length === 1) return reply(selected, call("edit", { path: "existing.txt", oldText: "Existing project data", newText: "Updated project data" }));
+		if (results.length === 2) return reply(selected, call("compat", { value: { invalid: true } }));
+		if (results.length === 3) return reply(selected, call("read", { path: "existing.txt" }));
+		childResults = results;
+		return reply(selected, text("Child completed"));
+	}, [(pi) => pi.registerTool({
+		name: "compat", label: "Compat", description: "Normalize input", parameters: Type.Object({ value: Type.String() }),
+		prepareArguments: (args) => {
+			if (typeof args?.value === "string") args.value += "-prepared";
+			return args;
+		},
+		async execute(_id, args) {
+			executions.push(args);
+			return { content: text(args.value), details: args };
+		},
+	})]);
+	await session.prompt("Run a child");
+	assert.deepEqual(executions, [{ value: "original-prepared" }]);
+	assert.equal(childResults[0].content[0].text, "original-prepared");
+	assert.equal(childResults[1].isError, false);
+	assert.equal(childResults[2].isError, true);
+	assert.match(JSON.stringify(childResults[3].content), /Updated project data/);
+});
