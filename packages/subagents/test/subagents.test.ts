@@ -71,20 +71,20 @@ function fixture(t, respond) {
 	return { execute, ctx, handlers, notifications, requests, get terminalInput() { return terminalInput; } };
 }
 
-test("foreground is default, workers start fresh, and model overrides are per call", async (t) => {
+test("foreground is default, subagents start fresh, and model overrides are per call", async (t) => {
 	const f = fixture(t, (selected) => reply(selected, text("Audit findings")));
-	const first = parse(await f.execute("spawn_worker", { task: "Audit" }));
+	const first = parse(await f.execute("spawn_subagent", { task: "Audit" }));
 	assert.equal(first.background, false);
 	assert.equal(first.status, "completed");
 	assert.equal(first.output, "Audit findings");
 	assert.equal(f.requests[0].model.id, "model");
 	assert.equal(f.requests[0].messages.filter((message) => message.role === "user").length, 1);
 	assert.match(JSON.stringify(f.requests[0].messages[0]), /Project instructions/);
-	const second = parse(await f.execute("spawn_worker", { task: "Deslop", model: "test/other", thinking: "low" }));
+	const second = parse(await f.execute("spawn_subagent", { task: "Deslop", model: "test/other", thinking: "low" }));
 	assert.equal(second.model, "test/other");
 	assert.equal(f.requests[1].options.reasoning, "low");
 	assert.deepEqual(f.notifications, []);
-	await assert.rejects(f.execute("spawn_worker", { task: "Audit", model: "missing" }), /Unknown or ambiguous/);
+	await assert.rejects(f.execute("spawn_subagent", { task: "Audit", model: "missing" }), /Unknown or ambiguous/);
 });
 
 test("background returns immediately, delivers results, and requests an automatic follow-up", async (t) => {
@@ -98,27 +98,27 @@ test("background returns immediately, delivers results, and requests an automati
 		};
 		return stream;
 	});
-	const started = parse(await f.execute("spawn_worker", { task: "Audit", background: true }));
+	const started = parse(await f.execute("spawn_subagent", { task: "Audit", background: true }));
 	assert.equal(started.status, "running");
 	assert.deepEqual(f.notifications, []);
 	await setImmediate();
 	finish();
-	const completed = parse(await f.execute("worker_status", { id: started.id, wait: true }));
+	const completed = parse(await f.execute("subagent_status", { id: started.id, wait: true }));
 	assert.equal(completed.output, "Background findings");
 	assert.equal(f.notifications.length, 1);
 	assert.deepEqual(f.notifications[0].options, { deliverAs: "followUp", triggerTurn: true });
 });
 
-test("workers can spawn foreground children with fresh context and inherit their parent's selected model", async (t) => {
+test("subagents can spawn foreground children with fresh context and inherit their parent's selected model", async (t) => {
 	const f = fixture(t, (selected, context) => {
 		const task = userText(context);
 		if (task.includes("Task:\nParent") && !context.messages.some((message) => message.role === "toolResult")) {
-			return reply(selected, call("spawn_worker", { task: "Child" }));
+			return reply(selected, call("spawn_subagent", { task: "Child" }));
 		}
 		return reply(selected, text(task.includes("Task:\nChild") ? "Child result" : "Parent result"));
 	});
-	await f.execute("spawn_worker", { task: "Parent", model: "test/other" });
-	const list = parse(await f.execute("worker_status", {}));
+	await f.execute("spawn_subagent", { task: "Parent", model: "test/other" });
+	const list = parse(await f.execute("subagent_status", {}));
 	assert.equal(list.length, 2);
 	assert.equal(list[1].parentId, list[0].id);
 	assert.equal(list[1].model, "test/other");
@@ -140,12 +140,12 @@ test("main cancellation and model stop cancel background work without late compl
 	const root = new AbortController();
 	f.ctx.signal = root.signal;
 	f.handlers.get("agent_start")({}, f.ctx);
-	const first = parse(await f.execute("spawn_worker", { task: "Audit", background: true }));
+	const first = parse(await f.execute("spawn_subagent", { task: "Audit", background: true }));
 	root.abort();
-	assert.equal(parse(await f.execute("worker_status", { id: first.id, wait: true })).status, "cancelled");
-	const second = parse(await f.execute("spawn_worker", { task: "Deslop", background: true }));
-	await f.execute("stop_worker", { id: second.id });
-	assert.equal(parse(await f.execute("worker_status", { id: second.id, wait: true })).status, "cancelled");
+	assert.equal(parse(await f.execute("subagent_status", { id: first.id, wait: true })).status, "cancelled");
+	const second = parse(await f.execute("spawn_subagent", { task: "Deslop", background: true }));
+	await f.execute("stop_subagent", { id: second.id });
+	assert.equal(parse(await f.execute("subagent_status", { id: second.id, wait: true })).status, "cancelled");
 	assert.deepEqual(f.notifications, []);
 });
 
@@ -155,21 +155,21 @@ test("cancellation releases sibling waits and allows shutdown to finish", { time
 		if (options.signal.aborted) return reply(selected, [], "aborted");
 		const stream = createAssistantMessageEventStream();
 		pending.push(async (id) => {
-			const ready = reply(selected, call("worker_status", { id, wait: true }));
+			const ready = reply(selected, call("subagent_status", { id, wait: true }));
 			for await (const event of ready) stream.push(event);
 			stream.end(await ready.result());
 		});
 		return stream;
 	});
-	const first = parse(await f.execute("spawn_worker", { task: "First", background: true }));
-	const second = parse(await f.execute("spawn_worker", { task: "Second", background: true }));
+	const first = parse(await f.execute("spawn_subagent", { task: "First", background: true }));
+	const second = parse(await f.execute("spawn_subagent", { task: "Second", background: true }));
 	await setImmediate();
 	await Promise.all([pending[0](second.id), pending[1](first.id)]);
 	await setImmediate();
-	assert(parse(await f.execute("worker_status", {})).every((worker) => worker.activity === "Using worker_status"));
-	await f.execute("stop_worker", {});
+	assert(parse(await f.execute("subagent_status", {})).every((subagent) => subagent.activity === "Using subagent_status"));
+	await f.execute("stop_subagent", {});
 	await f.handlers.get("session_shutdown")({}, f.ctx);
-	assert(parse(await f.execute("worker_status", {})).every((worker) => worker.status === "cancelled"));
+	assert(parse(await f.execute("subagent_status", {})).every((subagent) => subagent.status === "cancelled"));
 	assert.deepEqual(f.notifications, []);
 });
 
@@ -188,15 +188,15 @@ test("terminal cancellation recognizes both legacy and Kitty keys while the main
 	f.ctx.mode = "tui";
 	f.handlers.get("session_start")({}, f.ctx);
 	for (const key of ["\u001b", "\u0003", "\u001b[27u", "\u001b[99;5u"]) {
-		const started = parse(await f.execute("spawn_worker", { task: "Wait", background: true }));
+		const started = parse(await f.execute("spawn_subagent", { task: "Wait", background: true }));
 		f.terminalInput(key);
-		assert.equal(parse(await f.execute("worker_status", { id: started.id, wait: true })).status, "cancelled");
+		assert.equal(parse(await f.execute("subagent_status", { id: started.id, wait: true })).status, "cancelled");
 	}
 	assert.deepEqual(f.notifications, []);
 });
 
-test("real Pi tools preserve file access and permission hooks inside a worker", async (t) => {
-	const root = mkdtempSync(join(tmpdir(), "pisuite-worker-host-"));
+test("real Pi tools preserve file access and permission hooks inside a subagent", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pisuite-subagent-host-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	writeFileSync(join(root, "existing.txt"), "Existing project data");
 	const seen = [];
@@ -206,14 +206,14 @@ test("real Pi tools preserve file access and permission hooks inside a worker", 
 		models: [{ ...model, provider: undefined }],
 		streamSimple: (selected, context) => {
 			const task = userText(context);
-			if (!task.includes("Worker ID:")) {
+			if (!task.includes("Subagent ID:")) {
 				if (context.messages.some((message) => message.role === "toolResult")) return reply(selected, text("Main finished"));
-				return reply(selected, call("spawn_worker", { task: "Read existing.txt, then attempt a blocked write" }));
+				return reply(selected, call("spawn_subagent", { task: "Read existing.txt, then attempt a blocked write" }));
 			}
 			const results = context.messages.filter((message) => message.role === "toolResult");
 			if (results.length === 0) return reply(selected, call("read", { path: "existing.txt" }));
 			if (results.length === 1) return reply(selected, call("write", { path: "blocked.txt", content: "Blocked" }));
-			if (results.length === 2) return reply(selected, call("spawn_worker", { task: "Forbidden child" }));
+			if (results.length === 2) return reply(selected, call("spawn_subagent", { task: "Forbidden child" }));
 			assert.match(JSON.stringify(results[0].content), /Existing project data/);
 			assert.equal(results[1].isError, true);
 			assert.equal(results[2].isError, true);
@@ -227,7 +227,7 @@ test("real Pi tools preserve file access and permission hooks inside a worker", 
 			pi.on("tool_call", (event) => {
 				seen.push(event.toolName);
 				if (event.toolName === "write") return { block: true, reason: "Test permission gate" };
-				if (event.toolName === "spawn_worker" && seen.filter((name) => name === "spawn_worker").length > 1) return { block: true, reason: "No child workers" };
+				if (event.toolName === "spawn_subagent" && seen.filter((name) => name === "spawn_subagent").length > 1) return { block: true, reason: "No child subagents" };
 			});
 		}],
 	});
@@ -236,18 +236,18 @@ test("real Pi tools preserve file access and permission hooks inside a worker", 
 	t.after(() => session.dispose());
 	await session.bindExtensions({});
 	session.agent.toolExecution = "sequential";
-	await session.prompt("Run a worker audit");
-	assert(seen.includes("spawn_worker"));
+	await session.prompt("Run a subagent audit");
+	assert(seen.includes("spawn_subagent"));
 	assert(seen.includes("read"));
 	assert(seen.includes("write"));
-	assert.equal(seen.filter((name) => name === "spawn_worker").length, 2);
+	assert.equal(seen.filter((name) => name === "spawn_subagent").length, 2);
 	assert(!existsSync(join(root, "blocked.txt")));
 	assert.match(JSON.stringify(session.messages), /Read succeeded; write was blocked/);
 });
 
-test("a real background worker uses tools and foreground children after the main turn, then wakes it", { timeout: 5000 }, async (t) => {
+test("a real background subagent uses tools and foreground children after the main turn, then wakes it", { timeout: 5000 }, async (t) => {
 	for (const composite of [false, true]) await t.test(composite ? "child called inside a custom tool" : "child called directly", async (t) => {
-		const root = mkdtempSync(join(tmpdir(), "pisuite-worker-background-"));
+		const root = mkdtempSync(join(tmpdir(), "pisuite-subagent-background-"));
 		t.after(() => rmSync(root, { recursive: true, force: true }));
 		writeFileSync(join(root, "existing.txt"), "Background project data");
 		let release;
@@ -255,16 +255,16 @@ test("a real background worker uses tools and foreground children after the main
 		runtime.registerProvider("test", {
 			baseUrl: model.baseUrl, api: model.api, apiKey: "test", models: [{ ...model, provider: undefined }],
 			streamSimple: (selected, context) => {
-				if (!userText(context).includes("Worker ID:")) {
-					if (JSON.stringify(context.messages).includes("Background worker result:")) return reply(selected, text("Main received background findings"));
+				if (!userText(context).includes("Subagent ID:")) {
+					if (JSON.stringify(context.messages).includes("Background subagent result:")) return reply(selected, text("Main received background findings"));
 					if (context.messages.some((message) => message.role === "toolResult")) return reply(selected, text("Main idle"));
-					return reply(selected, call("spawn_worker", { task: "Read existing.txt", background: true, ...(composite ? { model: "virtual/router" } : {}) }));
+					return reply(selected, call("spawn_subagent", { task: "Read existing.txt", background: true, ...(composite ? { model: "virtual/router" } : {}) }));
 				}
 				const results = context.messages.filter((message) => message.role === "toolResult");
 				if (userText(context).includes("Task:\nNested child")) {
 					return reply(selected, results.length ? text("Child read succeeded") : call("read", { path: "existing.txt" }));
 				}
-				if (results.length === 1) return reply(selected, composite ? call("compose", {}) : call("spawn_worker", { task: "Nested child" }));
+				if (results.length === 1) return reply(selected, composite ? call("compose", {}) : call("spawn_subagent", { task: "Nested child" }));
 				if (results.length > 1) {
 					assert.match(JSON.stringify(context.messages), /Background project data/);
 					assert.match(JSON.stringify(results[1]), /Child read succeeded/);
@@ -285,7 +285,7 @@ test("a real background worker uses tools and foreground children after the main
 		const loader = new DefaultResourceLoader({ cwd: root, agentDir: root, settingsManager: settings, noExtensions: true, extensionFactories: [subagents, (pi) => pi.registerTool({
 			name: "compose", label: "Compose", description: "Compose a child result", parameters: Type.Object({}),
 			async execute(_id, _args, signal, _onUpdate, ctx) {
-				const outcome = await ctx.executeTool("spawn_worker", { task: "Nested child" }, { signal });
+				const outcome = await ctx.executeTool("spawn_subagent", { task: "Nested child" }, { signal });
 				assert.equal(outcome.isError, false);
 				const child = parse(outcome.result);
 				assert.equal(child.status, "completed");
@@ -298,7 +298,7 @@ test("a real background worker uses tools and foreground children after the main
 		t.after(() => session.dispose());
 		await session.bindExtensions({});
 		session.agent.toolExecution = "sequential";
-		await session.prompt("Start a background worker");
+		await session.prompt("Start a background subagent");
 		assert.equal(session.isIdle, true);
 		const resumed = new Promise((resolve) => session.subscribe((event) => {
 			if (event.type === "agent_end") resolve();
@@ -310,8 +310,8 @@ test("a real background worker uses tools and foreground children after the main
 	});
 });
 
-test("one package toggle disables every worker tool and command", async (t) => {
-	const root = mkdtempSync(join(tmpdir(), "pisuite-worker-toggle-"));
+test("one package toggle disables every subagent tool and command", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pisuite-subagent-toggle-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const packageDir = fileURLToPath(new URL("../", import.meta.url));
 	for (const enabled of [true, false]) {

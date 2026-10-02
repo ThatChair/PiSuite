@@ -1,10 +1,10 @@
 {
   "name": "pisuite-subagents",
   "version": "0.1.0",
-  "description": "Delegate dynamic tasks to foreground or background Pi workers.",
+  "description": "Delegate dynamic tasks to foreground or background Pi subagents.",
   "type": "module",
   "keywords": ["pi-package"],
-  "files": ["index.ts", "workers.ts"],
+  "files": ["index.ts", "subagents.ts"],
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },

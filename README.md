@@ -16,7 +16,7 @@ The npm install commands become available after the packages are published.
 
 - [pisuite-setup](packages/pisuite/README.md): the `/pisuite-setup` command and suite package list.
 - [pisuite-pi-documentation](packages/pi-documentation/README.md): moves Pi's built-in documentation instructions into the `pi-documentation` skill.
-- [pisuite-subagents](packages/subagents/README.md): dynamic workers with optional background execution, model selection, and cancellation.
+- [pisuite-subagents](packages/subagents/README.md): dynamic subagents with optional background execution, model selection, and cancellation.
 
 ## Development
 
