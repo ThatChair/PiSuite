@@ -9,6 +9,24 @@ function deferred() {
 	return { promise, resolve };
 }
 
+test("usage is drained once without exposing the accounting ledger in results", async () => {
+	const subagents = new Subagents(() => {}, () => {});
+	const first = subagents.start(input, async () => "First");
+	const second = subagents.start(input, async () => "Second");
+	const usage = {
+		input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10,
+		cost: { input: 0.001, output: 0.002, cacheRead: 0.003, cacheWrite: 0.004, total: 0.01 },
+	};
+	subagents.recordUsage(first, usage);
+	subagents.recordUsage(second, usage);
+	assert.equal("unreportedUsage" in subagents.info(first), false);
+	assert.equal(subagents.takeUsage().totalTokens, 20);
+	assert.equal(subagents.takeUsage(), undefined);
+	subagents.recordUsage(first, usage);
+	assert.deepEqual(subagents.takeUsage(), usage);
+	await subagents.close();
+});
+
 test("nested subagents share four slots and cancelled work holds its slot until settled", async () => {
 	const gate = deferred();
 	const subagents = new Subagents(() => {}, () => {});

@@ -15,11 +15,14 @@ const model = {
 	reasoning: false, input: ["text"], contextWindow: 100_000, maxTokens: 1024,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
-function reply(selected, content, stopReason = content.some((part) => part.type === "toolCall") ? "toolUse" : "stop") {
+function reply(selected, content, stopReason = content.some((part) => part.type === "toolCall") ? "toolUse" : "stop", usage = {
+	input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+}) {
 	const stream = createAssistantMessageEventStream();
 	const message = {
 		role: "assistant", content, api: selected.api, provider: selected.provider, model: selected.id,
-		usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+		usage,
 		stopReason, timestamp: Date.now(),
 	};
 	queueMicrotask(() => {
@@ -126,6 +129,33 @@ test("subagents can spawn foreground children with fresh context and inherit the
 	assert.equal(f.requests[1].messages.filter((message) => message.role === "user").length, 1);
 });
 
+test("foreground usage includes descendants once, and background usage waits for a main-agent tool call", async (t) => {
+	const usage = {
+		input: 3, output: 5, cacheRead: 2, cacheWrite: 4, cacheWrite1h: 4, reasoning: 2, totalTokens: 14,
+		cost: { input: 0.003, output: 0.005, cacheRead: 0.002, cacheWrite: 0.004, total: 0.014 },
+	};
+	const f = fixture(t, (selected, context) => {
+		if (userText(context).includes("Task:\nParent") && !context.messages.some((message) => message.role === "toolResult")) {
+			return reply(selected, call("spawn_subagent", { task: "Child" }), "toolUse", usage);
+		}
+		return reply(selected, text("Finished"), "stop", usage);
+	});
+	const foreground = await f.execute("spawn_subagent", { task: "Parent" });
+	assert.equal(foreground.usage.totalTokens, 42);
+	assert.equal(foreground.usage.input, 9);
+	assert.equal(foreground.usage.cacheWrite1h, 12);
+	assert.equal(foreground.usage.reasoning, 6);
+	assert.equal(foreground.usage.cost.total, 0.042);
+	assert.equal((await f.execute("subagent_status", {})).usage, undefined);
+	const background = parse(await f.execute("spawn_subagent", { task: "Background", background: true }));
+	await setImmediate();
+	assert.equal(f.notifications.length, 1);
+	assert.equal(f.notifications[0].message.usage, undefined);
+	const status = await f.execute("subagent_status", { id: background.id });
+	assert.deepEqual(status.usage, usage);
+	assert.equal((await f.execute("subagent_status", { id: background.id })).usage, undefined);
+});
+
 test("main cancellation and model stop cancel background work without late completion messages", async (t) => {
 	const f = fixture(t, (selected, _context, options) => {
 		const stream = createAssistantMessageEventStream();
@@ -200,11 +230,13 @@ test("real Pi tools preserve file access and permission hooks inside a subagent"
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	writeFileSync(join(root, "existing.txt"), "Existing project data");
 	const seen = [];
+	let modelCalls = 0;
 	const runtime = await ModelRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null, refreshOnCreate: false });
 	runtime.registerProvider("test", {
 		baseUrl: model.baseUrl, api: model.api, apiKey: "test",
 		models: [{ ...model, provider: undefined }],
 		streamSimple: (selected, context) => {
+			modelCalls++;
 			const task = userText(context);
 			if (!task.includes("Subagent ID:")) {
 				if (context.messages.some((message) => message.role === "toolResult")) return reply(selected, text("Main finished"));
@@ -243,6 +275,7 @@ test("real Pi tools preserve file access and permission hooks inside a subagent"
 	assert.equal(seen.filter((name) => name === "spawn_subagent").length, 2);
 	assert(!existsSync(join(root, "blocked.txt")));
 	assert.match(JSON.stringify(session.messages), /Read succeeded; write was blocked/);
+	assert.equal(session.getSessionStats().tokens.total, modelCalls * 2);
 });
 
 test("a real background subagent uses tools and foreground children after the main turn, then wakes it", { timeout: 5000 }, async (t) => {
@@ -256,7 +289,10 @@ test("a real background subagent uses tools and foreground children after the ma
 			baseUrl: model.baseUrl, api: model.api, apiKey: "test", models: [{ ...model, provider: undefined }],
 			streamSimple: (selected, context) => {
 				if (!userText(context).includes("Subagent ID:")) {
-					if (JSON.stringify(context.messages).includes("Background subagent result:")) return reply(selected, text("Main received background findings"));
+					if (JSON.stringify(context.messages).includes("Background subagent result:")) {
+						return reply(selected, context.messages.filter((message) => message.role === "toolResult").length > 1
+							? text("Main received background findings") : call("subagent_status", {}));
+					}
 					if (context.messages.some((message) => message.role === "toolResult")) return reply(selected, text("Main idle"));
 					return reply(selected, call("spawn_subagent", { task: "Read existing.txt", background: true, ...(composite ? { model: "virtual/router" } : {}) }));
 				}
@@ -307,6 +343,7 @@ test("a real background subagent uses tools and foreground children after the ma
 		await resumed;
 		assert.match(JSON.stringify(session.messages), /Background read succeeded/);
 		assert.match(JSON.stringify(session.messages), /Main received background findings/);
+		assert.equal(session.getSessionStats().tokens.total, 18);
 	});
 });
 
@@ -324,4 +361,156 @@ test("one package toggle disables every subagent tool and command", async (t) =>
 		assert.equal(extensions.flatMap((extension) => [...extension.tools.keys()]).length, enabled ? 3 : 0);
 		assert.equal(extensions.flatMap((extension) => [...extension.commands.keys()]).length, enabled ? 1 : 0);
 	}
+});
+
+async function hostFixture(t, respond, extensions = []) {
+	const root = mkdtempSync(join(tmpdir(), "pisuite-subagent-regression-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	writeFileSync(join(root, "existing.txt"), "Existing project data");
+	const runtime = await ModelRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null, refreshOnCreate: false });
+	runtime.registerProvider("test", {
+		baseUrl: model.baseUrl, api: model.api, apiKey: "test",
+		models: [{ ...model, provider: undefined }, { ...model, id: "other", provider: undefined }],
+		streamSimple: respond,
+	});
+	const settings = SettingsManager.inMemory();
+	const loader = new DefaultResourceLoader({ cwd: root, agentDir: root, settingsManager: settings, noExtensions: true, extensionFactories: [subagents, ...extensions] });
+	await loader.reload();
+	const { session } = await createAgentSession({ cwd: root, model: runtime.getModel("test", "model"), modelRuntime: runtime, resourceLoader: loader, settingsManager: settings, sessionManager: SessionManager.inMemory(root) });
+	t.after(async () => {
+		await loader.getExtensions().extensions[0].tools.get("stop_subagent").definition.execute("cleanup", {}, undefined, undefined, undefined);
+		await setImmediate();
+		session.dispose();
+	});
+	await session.bindExtensions({});
+	session.agent.toolExecution = "sequential";
+	return session;
+}
+
+test("cancelling a foreground spawn's own signal stops its work", async (t) => {
+	let streamSignal;
+	const f = fixture(t, (selected, _context, options) => {
+		streamSignal = options.signal;
+		const stream = createAssistantMessageEventStream();
+		const abort = async () => {
+			const ready = reply(selected, [], "aborted");
+			for await (const event of ready) stream.push(event);
+			stream.end(await ready.result());
+		};
+		if (options.signal.aborted) void abort();
+		else options.signal.addEventListener("abort", abort, { once: true });
+		return stream;
+	});
+	const controller = new AbortController();
+	const pending = f.execute("spawn_subagent", { task: "Work owned by a custom tool" }, controller.signal);
+	await setImmediate();
+	controller.abort(new Error("Custom tool timeout"));
+	await assert.rejects(pending, /Custom tool timeout/);
+	assert.equal(parse(await f.execute("subagent_status", {}))[0].status, "cancelled");
+	assert.equal(streamSignal.aborted, true);
+});
+
+test("foreground children can wait for siblings and final results pass through status hooks", { timeout: 5000 }, async (t) => {
+	let firstId;
+	let release;
+	let finishSecond;
+	let childResult;
+	let siblingResult;
+	const secondFinished = new Promise((resolve) => { finishSecond = resolve; });
+	const finalHooks = new Set();
+	const session = await hostFixture(t, (selected, context) => {
+		const task = userText(context);
+		const results = context.messages.filter((message) => message.role === "toolResult");
+		if (!task.includes("Subagent ID:")) {
+			if (!results.length) return reply(selected, call("spawn_subagent", { task: "First", background: true }));
+			if (results.length === 1) return reply(selected, call("spawn_subagent", { task: "Second", background: true }));
+			return reply(selected, text("Main idle"));
+		}
+		if (task.includes("Task:\nFirst")) {
+			firstId = task.match(/Subagent ID: (\S+)/)[1];
+			if (results.length) return reply(selected, text("Private first result"));
+			const stream = createAssistantMessageEventStream();
+			release = async () => {
+				const ready = reply(selected, call("read", { path: "existing.txt" }));
+				for await (const event of ready) stream.push(event);
+				stream.end(await ready.result());
+			};
+			return stream;
+		}
+		if (task.includes("Task:\nSecond")) {
+			if (!results.length) return reply(selected, call("spawn_subagent", { task: "Waiting child" }));
+			childResult = results[0];
+			finishSecond();
+			return reply(selected, text("Second completed"));
+		}
+		if (!results.length) return reply(selected, call("subagent_status", { id: firstId, wait: true }));
+		siblingResult = results[0];
+		return reply(selected, text("Private child result " + "x".repeat(50_001)));
+	}, [(pi) => pi.on("tool_result", (event) => {
+		if (event.toolName !== "subagent_status") return;
+		const info = JSON.parse(event.content[0].text);
+		if (info.status !== "completed") return;
+		finalHooks.add(info.task);
+		if (info.task === "Waiting child") assert.match(info.output, /\[Truncated\./);
+		const redacted = { ...info, output: `Filtered ${info.task}` };
+		return { content: text(JSON.stringify(redacted)), details: redacted };
+	})]);
+	await session.prompt("Start two background subagents");
+	await setImmediate();
+	await release();
+	await secondFinished;
+	assert.equal(parse(siblingResult).output, "Filtered First");
+	assert.equal(parse(childResult).output, "Filtered Waiting child");
+	assert(finalHooks.has("First"));
+	assert(finalHooks.has("Waiting child"));
+});
+
+test("a failed deferred child still returns an error result", { timeout: 5000 }, async (t) => {
+	let childResult;
+	const session = await hostFixture(t, (selected, context) => {
+		const task = userText(context);
+		const results = context.messages.filter((message) => message.role === "toolResult");
+		if (!task.includes("Subagent ID:")) return reply(selected, results.length ? text("Main completed") : call("spawn_subagent", { task: "Parent" }));
+		if (task.includes("Task:\nFailing child")) return reply(selected, [], "error");
+		if (!results.length) return reply(selected, call("spawn_subagent", { task: "Failing child" }));
+		childResult = results[0];
+		return reply(selected, text("Parent handled failure"));
+	});
+	await session.prompt("Run parent");
+	assert.equal(childResult.isError, true);
+	assert.equal(parse(childResult).status, "failed");
+});
+
+test("nested background completion gives the main follow-up its own caller and model", { timeout: 5000 }, async (t) => {
+	let release;
+	let finishMain;
+	const mainFinished = new Promise((resolve) => { finishMain = resolve; });
+	const session = await hostFixture(t, (selected, context) => {
+		const task = userText(context);
+		const results = context.messages.filter((message) => message.role === "toolResult");
+		if (!task.includes("Subagent ID:")) {
+			if (!results.length) return reply(selected, call("spawn_subagent", { task: "Parent", model: "test/other" }));
+			if (JSON.stringify(context.messages).includes("Background subagent result:") && results.length === 1) return reply(selected, call("spawn_subagent", { task: "Fresh root" }));
+			if (results.length === 2) finishMain();
+			return reply(selected, text("Main idle"));
+		}
+		if (task.includes("Task:\nParent")) return reply(selected, results.length ? text("Parent completed") : call("spawn_subagent", { task: "Nested background child", background: true }));
+		if (task.includes("Task:\nFresh root")) return reply(selected, text("Fresh root completed"));
+		const stream = createAssistantMessageEventStream();
+		release = async () => {
+			const ready = reply(selected, text("Nested background child completed"));
+			for await (const event of ready) stream.push(event);
+			stream.end(await ready.result());
+		};
+		return stream;
+	});
+	await session.prompt("Run parent and return");
+	assert.equal(session.isIdle, true);
+	await release();
+	await mainFinished;
+	await session.waitForIdle();
+	const fresh = session.messages.filter((message) => message.role === "toolResult").at(-1);
+	assert.equal(fresh.isError, false);
+	assert.equal(parse(fresh).parentId, undefined);
+	assert.equal(parse(fresh).model, "test/model");
 });

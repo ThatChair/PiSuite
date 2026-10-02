@@ -1,4 +1,29 @@
 import { randomUUID } from "node:crypto";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+
+type Usage = NonNullable<AgentToolResult<unknown>["usage"]>;
+
+function addUsage(first: Usage | undefined, second: Usage): Usage {
+	if (!first) return structuredClone(second);
+	return {
+		input: first.input + second.input,
+		output: first.output + second.output,
+		cacheRead: first.cacheRead + second.cacheRead,
+		cacheWrite: first.cacheWrite + second.cacheWrite,
+		...(first.cacheWrite1h !== undefined || second.cacheWrite1h !== undefined
+			? { cacheWrite1h: (first.cacheWrite1h ?? 0) + (second.cacheWrite1h ?? 0) } : {}),
+		...(first.reasoning !== undefined || second.reasoning !== undefined
+			? { reasoning: (first.reasoning ?? 0) + (second.reasoning ?? 0) } : {}),
+		totalTokens: first.totalTokens + second.totalTokens,
+		cost: {
+			input: first.cost.input + second.cost.input,
+			output: first.cost.output + second.cost.output,
+			cacheRead: first.cost.cacheRead + second.cost.cacheRead,
+			cacheWrite: first.cost.cacheWrite + second.cost.cacheWrite,
+			total: first.cost.total + second.cost.total,
+		},
+	};
+}
 
 export type SubagentStatus = "running" | "completed" | "failed" | "cancelled";
 
@@ -21,6 +46,7 @@ export interface Subagent extends SubagentInfo {
 	controller: AbortController;
 	done: Promise<void>;
 	settled: boolean;
+	unreportedUsage?: Usage;
 }
 
 export class Subagents {
@@ -51,8 +77,21 @@ export class Subagents {
 	}
 
 	info(subagent: Subagent): SubagentInfo {
-		const { controller: _controller, done: _done, settled: _settled, ...info } = subagent;
+		const { controller: _controller, done: _done, settled: _settled, unreportedUsage: _usage, ...info } = subagent;
 		return info;
+	}
+
+	recordUsage(subagent: Subagent, usage: Usage): void {
+		subagent.unreportedUsage = addUsage(subagent.unreportedUsage, usage);
+	}
+
+	takeUsage(): Usage | undefined {
+		let usage: Usage | undefined;
+		for (const subagent of this.records.values()) {
+			if (subagent.unreportedUsage) usage = addUsage(usage, subagent.unreportedUsage);
+			subagent.unreportedUsage = undefined;
+		}
+		return usage;
 	}
 
 	start(input: Pick<SubagentInfo, "task" | "model" | "background" | "parentId">, run: (subagent: Subagent) => Promise<string>): Subagent {

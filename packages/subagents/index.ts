@@ -30,6 +30,7 @@ interface Caller {
 	parentId?: string;
 	deferWait?: boolean;
 	waitFor?: Subagent;
+	spawnResult?: boolean;
 }
 
 function result(info: SubagentInfo | SubagentInfo[]) {
@@ -78,18 +79,24 @@ export default function (pi: ExtensionAPI): void {
 	};
 	const subagents = new Subagents(updateStatus, (subagent) => {
 		if (!live) return;
-		pi.sendMessage({
+		callerScope.exit(() => pi.sendMessage({
 			customType: "pisuite-subagents-result",
 			content: `Background subagent result:\n${subagentResult(subagent).content[0].text}`,
 			display: true,
 			details: subagents.info(subagent),
-		}, { deliverAs: "followUp", triggerTurn: true });
+		}, { deliverAs: "followUp", triggerTurn: true }));
 	});
 
-	function subagentResult(subagent: Subagent) {
+	function subagentResult(subagent: Subagent, reportUsage = false) {
 		const info = subagents.info(subagent);
 		if (info.output.length > 50_000) info.output = `${info.output.slice(0, 50_000)}\n[Truncated. Use subagent_status to retrieve the complete result.]`;
-		return { ...result(info), isError: subagent.status === "failed" || subagent.status === "cancelled" };
+		return { ...result(info), isError: subagent.status === "failed" || subagent.status === "cancelled", usage: reportUsage ? takeUsage() : undefined };
+	}
+
+	function takeUsage() {
+		// Nested subagent calls share the same ledger. Only main-agent calls
+		// report it to Pi, so descendant model usage is counted once.
+		return callerScope.getStore() ? undefined : subagents.takeUsage();
 	}
 
 	async function runSubagent(subagent: Subagent, caller: Caller): Promise<string> {
@@ -105,7 +112,9 @@ export default function (pi: ExtensionAPI): void {
 					// Release Pi's serial nested-tool queue before waiting, so the
 					// target subagent can use that queue to finish its own tools.
 					await waitForSubagent(waiting, signal);
-					return tool.name === "spawn_subagent" ? subagentResult(waiting) : result(subagents.info(waiting));
+					const final = await callerScope.run({ ...scope, spawnResult: tool.name === "spawn_subagent" }, () =>
+						caller.ctx.executeTool("subagent_status", { id: waiting.id }, { signal, onUpdate }));
+					return { ...final.result, isError: final.isError };
 				}
 				return { ...outcome.result, isError: outcome.isError };
 			}),
@@ -126,6 +135,7 @@ export default function (pi: ExtensionAPI): void {
 			if (event.type === "message_end" && event.message.role === "assistant") {
 				subagent.tokens += event.message.usage.totalTokens;
 				subagent.cost += event.message.usage.cost.total;
+				subagents.recordUsage(subagent, event.message.usage);
 				subagents.update(subagent, "Thinking");
 			}
 		});
@@ -161,13 +171,19 @@ export default function (pi: ExtensionAPI): void {
 				background: params.background ?? false, parentId: caller.parentId,
 			}, (record) => runSubagent(record, caller));
 			if (subagent.background) return subagentResult(subagent);
+			if (signal) {
+				const abort = () => subagents.stop(subagent.id);
+				signal.addEventListener("abort", abort, { once: true });
+				const cleanup = () => signal.removeEventListener("abort", abort);
+				void subagent.done.then(cleanup, cleanup);
+			}
 			onUpdate?.(subagentResult(subagent));
 			if (parent?.deferWait) {
 				parent.waitFor = subagent;
 				return subagentResult(subagent);
 			}
 			await waitForSubagent(subagent, signal);
-			return subagentResult(subagent);
+			return subagentResult(subagent, true);
 		},
 	};
 	const status: ToolDefinition<typeof StatusParams> = {
@@ -178,7 +194,7 @@ export default function (pi: ExtensionAPI): void {
 		async execute(_id, params, signal) {
 			if (!params.id) {
 				if (params.wait) throw new Error("An ID is required when waiting for a subagent.");
-				return result(subagents.list());
+				return { ...result(subagents.list()), usage: takeUsage() };
 			}
 			const subagent = subagents.get(params.id);
 			if (params.wait) {
@@ -191,7 +207,9 @@ export default function (pi: ExtensionAPI): void {
 				if (caller?.deferWait) caller.waitFor = subagent;
 				else await waitForSubagent(subagent, signal);
 			}
-			return result(subagents.info(subagent));
+			return callerScope.getStore()?.spawnResult
+				? subagentResult(subagent)
+				: { ...result(subagents.info(subagent)), usage: takeUsage() };
 		},
 	};
 	const stop: ToolDefinition<typeof StopParams> = {
@@ -200,7 +218,7 @@ export default function (pi: ExtensionAPI): void {
 		description: "Cancel subagents and suppress their background completion messages.",
 		parameters: StopParams,
 		async execute(_id, params) {
-			return result(subagents.stop(params.id));
+			return { ...result(subagents.stop(params.id)), usage: takeUsage() };
 		},
 	};
 	for (const tool of [spawn, status, stop]) {
