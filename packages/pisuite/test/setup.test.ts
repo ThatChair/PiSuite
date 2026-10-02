@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { DefaultPackageManager } from "@earendil-works/pi-coding-agent";
-import setup from "../index.ts";
+import setup, { suitePackages } from "../index.ts";
 
 function fixture(t, globalSettings = {}, projectSettings = {}) {
 	const root = mkdtempSync(join(tmpdir(), "pisuite-setup-"));
@@ -49,28 +49,40 @@ test("startup reminds without installing; setup preserves choices; rerun does no
 	assert.deepEqual(f.readGlobal(), original);
 	assert.match(f.messages[0], /\/pisuite-setup/);
 	await f.run();
-	assert.deepEqual(f.installs, ["npm:pisuite-pi-documentation"]);
-	assert.deepEqual(f.readGlobal(), { ...original, packages: [...original.packages, "npm:pisuite-pi-documentation"] });
+	assert.deepEqual(f.installs, suitePackages.map((name) => `npm:${name}`));
+	assert.deepEqual(f.readGlobal(), { ...original, packages: [...original.packages, ...suitePackages.map((name) => `npm:${name}`)] });
 	const after = readFileSync(f.globalPath, "utf8");
 	await f.run();
-	assert.equal(f.installs.length, 1);
+	assert.equal(f.installs.length, suitePackages.length);
 	assert.equal(readFileSync(f.globalPath, "utf8"), after);
 	assert.match(f.messages.at(-1), /already configured/);
 });
 
 test("preserves disabled pinned global packages without repairing missing installs", async (t) => {
-	const original = { packages: [{ source: "npm:pisuite-pi-documentation@0.1.0", extensions: [], skills: [] }] };
+	const original = { packages: suitePackages.map((name) => ({ source: `npm:${name}@0.1.0`, extensions: [], skills: [] })) };
 	const f = fixture(t, original);
 	await f.run();
 	assert.deepEqual(f.installs, []);
 	assert.deepEqual(f.readGlobal(), original);
 });
 
+test("adding a suite package preserves the disabled existing package and installs only the new one", async (t) => {
+	const disabled = { source: "npm:pisuite-pi-documentation@0.1.0", extensions: [] };
+	const f = fixture(t, { packages: [disabled] });
+	f.handlers.get("session_start")({}, f.ctx);
+	assert.deepEqual(f.installs, []);
+	await f.run();
+	assert.deepEqual(f.installs, ["npm:pisuite-subagents"]);
+	assert.deepEqual(f.readGlobal().packages, [disabled, "npm:pisuite-subagents"]);
+	await f.run();
+	assert.deepEqual(f.installs, ["npm:pisuite-subagents"]);
+});
+
 test("preserves disabled pinned npm entries with whitespace", async (t) => {
 	for (const source of ["npm: pisuite-pi-documentation@0.1.0", "npm:pisuite-pi-documentation@0.1.0 \t", " npm:pisuite-pi-documentation@0.1.0"]) {
 		for (const scope of ["global", "project"]) {
 			await t.test(`${scope}: ${JSON.stringify(source)}`, async (t) => {
-				const original = { packages: [{ source, extensions: [] }] };
+				const original = { packages: suitePackages.map((name) => ({ source: source.replace("pisuite-pi-documentation", name), extensions: [] })) };
 				const f = fixture(t, scope === "global" ? original : {}, scope === "project" ? original : {});
 				const beforeGlobal = readFileSync(f.globalPath, "utf8");
 				const beforeProject = f.readProject();
@@ -86,7 +98,7 @@ test("preserves disabled pinned npm entries with whitespace", async (t) => {
 });
 
 test("disabled project entries and autoload deltas are left alone", async (t) => {
-	const project = { packages: [{ source: "npm:pisuite-pi-documentation@next", autoload: false, extensions: ["-index.ts"] }] };
+	const project = { packages: suitePackages.map((name) => ({ source: `npm:${name}@next`, autoload: false, extensions: ["-index.ts"] })) };
 	const f = fixture(t, { theme: "dark" }, project);
 	const before = f.readProject();
 	await f.run();
@@ -96,8 +108,8 @@ test("disabled project entries and autoload deltas are left alone", async (t) =>
 });
 
 test("recognizes standalone local installs", async (t) => {
-	const packagePath = fileURLToPath(new URL("../../pi-documentation/", import.meta.url));
-	const f = fixture(t, { packages: [{ source: packagePath, extensions: [] }] });
+	const paths = ["pi-documentation", "subagents"].map((name) => fileURLToPath(new URL(`../../${name}/`, import.meta.url)));
+	const f = fixture(t, { packages: paths.map((source) => ({ source, extensions: [] })) });
 	await f.run();
 	assert.deepEqual(f.installs, []);
 });
@@ -108,7 +120,7 @@ test("global installation uses global npm choices rather than project overrides"
 		assert.deepEqual(this.settingsManager.getSettings().npmCommand, ["npm"]);
 	});
 	await f.run();
-	assert.deepEqual(f.readGlobal().packages, ["npm:pisuite-pi-documentation"]);
+	assert.deepEqual(f.readGlobal().packages, suitePackages.map((name) => `npm:${name}`));
 });
 
 test("failed installs do not persist a package entry", async (t) => {
@@ -197,7 +209,7 @@ test("preserves spaces in local package paths", async (t) => {
 	const packagePath = join(f.ctx.cwd, "local package");
 	mkdirSync(packagePath);
 	writeFileSync(join(packagePath, "package.json"), JSON.stringify({ name: "pisuite-pi-documentation" }));
-	const original = { packages: [{ source: packagePath, extensions: [] }] };
+	const original = { packages: [{ source: packagePath, extensions: [] }, { source: "npm:pisuite-subagents", extensions: [] }] };
 	writeFileSync(f.globalPath, JSON.stringify(original));
 	await f.run();
 	assert.deepEqual(f.installs, []);

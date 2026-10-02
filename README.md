@@ -1,6 +1,6 @@
 # PiSuite
 
-PiSuite is a curated collection of complementary Pi extensions and skills. Each package works on its own. Requires Pi 0.84.4 or newer.
+PiSuite is a curated collection of complementary Pi extensions and skills. Each package works on its own. The full suite requires Pi 0.99.1 or newer; individual packages document their minimum version.
 
 ## Install
 
@@ -16,6 +16,7 @@ The npm install commands become available after the packages are published.
 
 - [pisuite-setup](packages/pisuite/README.md): the `/pisuite-setup` command and suite package list.
 - [pisuite-pi-documentation](packages/pi-documentation/README.md): moves Pi's built-in documentation instructions into the `pi-documentation` skill.
+- [pisuite-subagents](packages/subagents/README.md): dynamic subagents with optional background execution, model selection, and cancellation.
 
 ## Development
 
